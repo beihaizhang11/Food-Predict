@@ -1,0 +1,15 @@
+{
+  "nodes": [
+    { "id": "data-import", "label": "数据采集", "status": "done" },
+    { "id": "clean", "label": "数据清洗", "status": "done" },
+    { "id": "nlp", "label": "文本分析", "status": "done" },
+    { "id": "kg", "label": "图谱构建", "status": "done" },
+    { "id": "predict", "label": "趋势预测", "status": "done" }
+  ],
+  "edges": [
+    { "from": "data-import", "to": "clean" },
+    { "from": "clean", "to": "nlp" },
+    { "from": "nlp", "to": "kg" },
+    { "from": "kg", "to": "predict" }
+  ]
+}

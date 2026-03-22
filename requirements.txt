@@ -1,0 +1,15 @@
+Flask==3.1.0
+Flask-SQLAlchemy==3.1.1
+flask-cors==5.0.1
+python-dotenv==1.0.1
+PyMySQL==1.1.1
+neo4j==5.28.1
+pandas==2.2.3
+numpy==2.2.4
+scikit-learn==1.6.1
+torch==2.6.0
+transformers==4.49.0
+sentence-transformers==3.4.1
+tqdm==4.67.1
+pytest==8.3.5
+pytest-mock==3.14.0

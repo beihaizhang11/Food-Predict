@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>餐饮点评趋势预测与知识图谱可视化</title>
+  <link rel="stylesheet" href="./styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <script src="https://unpkg.com/cytoscape/dist/cytoscape.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>餐饮点评趋势预测与知识图谱可视化系统</h1>
+    <div class="filters">
+      <input id="start" type="date" />
+      <input id="end" type="date" />
+      <input id="shopId" placeholder="shop_id (如 S101)" value="S101" />
+      <input id="dish" placeholder="dish (如 宫保鸡丁)" />
+      <button id="refreshBtn">刷新</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>趋势预测</h2>
+      <div id="trendChart" class="chart"></div>
+      <div id="explainSummary" class="explain-summary"></div>
+      <div id="driverCards" class="driver-cards"></div>
+    </section>
+
+    <section class="panel">
+      <h2>知识图谱（聚合）</h2>
+      <div id="graphChart" class="chart"></div>
+    </section>
+
+    <section class="panel panel-wide">
+      <h2>工作流与内部数据快照</h2>
+      <div id="workflowChart" class="chart chart-short"></div>
+      <div id="workflowMetrics" class="metrics-grid"></div>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>
