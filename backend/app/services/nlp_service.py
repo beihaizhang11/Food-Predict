@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import re
 from dataclasses import dataclass
@@ -22,10 +24,10 @@ class NlpService:
         self._sentiment_pipe = None
         self._ner_pipe = None
         self.attribute_keywords = {
-            "服务": ["服务", "态度", "店员", "上菜"],
-            "价格": ["价格", "便宜", "实惠", "贵", "性价比"],
+            "服务": ["服务", "态度", "店员", "上菜", "排队", "等待"],
+            "价格": ["价格", "便宜", "实惠", "贵", "性价比", "划算"],
             "环境": ["环境", "卫生", "嘈杂", "干净", "装修"],
-            "口味": ["好吃", "难吃", "咸", "辣", "甜", "鲜"],
+            "口味": ["好吃", "难吃", "咸", "辣", "甜", "油腻", "口味"],
         }
 
     def _load_models(self) -> None:
@@ -39,7 +41,7 @@ class NlpService:
             self._ner_pipe = pipeline("ner", model=current_app.config["NER_MODEL"])
 
     def analyze(self, text: str) -> NlpResult:
-        clean_text = re.sub(r"\s+", " ", text.strip())
+        clean_text = re.sub(r"\s+", " ", str(text).strip())
         if not clean_text:
             return NlpResult(sentiment=0.0, entities=[], keywords=[], embedding=[])
 
@@ -47,13 +49,9 @@ class NlpService:
         embedding = self._sbert.encode(clean_text).tolist()
         sentiment_raw = self._sentiment_pipe(clean_text)[0]
         sentiment = self._normalize_sentiment(sentiment_raw)
-
         entities = self._extract_entities(clean_text)
         keywords = self._extract_keywords(clean_text)
-
-        return NlpResult(
-            sentiment=sentiment, entities=entities, keywords=keywords, embedding=embedding
-        )
+        return NlpResult(sentiment=sentiment, entities=entities, keywords=keywords, embedding=embedding)
 
     def _normalize_sentiment(self, raw: dict[str, Any]) -> float:
         label = str(raw.get("label", "")).lower()
@@ -65,10 +63,9 @@ class NlpService:
         return score
 
     def _extract_entities(self, text: str) -> list[dict[str, Any]]:
-        found = []
+        found: list[dict[str, Any]] = []
         try:
-            ner_results = self._ner_pipe(text)
-            for item in ner_results:
+            for item in self._ner_pipe(text):
                 found.append(
                     {
                         "type": item.get("entity", "UNKNOWN"),
@@ -80,19 +77,16 @@ class NlpService:
             found = []
 
         for attr, words in self.attribute_keywords.items():
-            for w in words:
-                if w in text:
-                    found.append({"type": "ATTRIBUTE", "text": attr, "score": 1.0})
-                    break
+            if any(w in text for w in words):
+                found.append({"type": "ATTRIBUTE", "text": attr, "score": 1.0})
         return found
 
     def _extract_keywords(self, text: str) -> list[str]:
         words = [w for w in re.split(r"[，。,.!?！？\s]+", text) if len(w) >= 2]
         freq: dict[str, int] = {}
-        for word in words:
-            freq[word] = freq.get(word, 0) + 1
-        top = sorted(freq.items(), key=lambda x: x[1], reverse=True)[:8]
-        return [x[0] for x in top]
+        for w in words:
+            freq[w] = freq.get(w, 0) + 1
+        return [k for k, _ in sorted(freq.items(), key=lambda x: x[1], reverse=True)[:8]]
 
     @staticmethod
     def serialize_embedding(values: list[float]) -> str:

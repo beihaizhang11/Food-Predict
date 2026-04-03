@@ -1,4 +1,5 @@
 import json
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
@@ -46,6 +47,9 @@ class ImportService:
                 review.shop_id = payload["shop_id"]
                 review.dish = payload["dish"]
                 review.rating = payload["rating"]
+                review.rating_env = payload["rating_env"]
+                review.rating_flavor = payload["rating_flavor"]
+                review.rating_service = payload["rating_service"]
                 review.review_text = payload["review_text"]
                 review.review_time = payload["review_time"]
                 review.tags = payload["tags"]
@@ -134,7 +138,22 @@ class ImportService:
             "shop_id": str(row["shop_id"])[:32],
             "dish": str(row["dish"])[:64],
             "rating": float(row["rating"]),
+            "rating_env": self._optional_float(row.get("rating_env")),
+            "rating_flavor": self._optional_float(row.get("rating_flavor")),
+            "rating_service": self._optional_float(row.get("rating_service")),
             "review_text": str(row["review_text"]),
             "review_time": parse_datetime(str(row["review_time"])),
             "tags": tags_str[:255],
         }
+
+    @staticmethod
+    def _optional_float(value: Any) -> float | None:
+        if value is None:
+            return None
+        try:
+            out = float(value)
+        except Exception:
+            return None
+        if math.isnan(out):
+            return None
+        return out

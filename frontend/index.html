@@ -3,21 +3,36 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>餐饮点评趋势预测与知识图谱可视化</title>
+  <title>基于点评文本的餐饮消费趋势预测系统</title>
   <link rel="stylesheet" href="./styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
   <script src="https://unpkg.com/cytoscape/dist/cytoscape.min.js"></script>
 </head>
 <body>
-  <header>
-    <h1>餐饮点评趋势预测与知识图谱可视化系统</h1>
-    <div class="filters">
-      <input id="start" type="date" />
-      <input id="end" type="date" />
-      <input id="shopId" placeholder="shop_id (如 S101)" value="S101" />
-      <input id="dish" placeholder="dish (如 宫保鸡丁)" />
-      <button id="refreshBtn">刷新</button>
+  <header class="topbar">
+    <div class="title-wrap">
+      <h1>基于美团外卖点评文本的餐饮消费趋势预测系统</h1>
+      <p>趋势预测 + 因子图谱 + 影响解释的闭环分析</p>
     </div>
+
+    <div class="filters">
+      <label>
+        <span>开始日期</span>
+        <input id="start" type="date" />
+      </label>
+      <label>
+        <span>结束日期</span>
+        <input id="end" type="date" />
+      </label>
+      <label>
+        <span>商家</span>
+        <select id="shopId">
+          <option value="">全部商家</option>
+        </select>
+      </label>
+      <button id="refreshBtn" type="button">刷新</button>
+    </div>
+    <div id="statusText" class="status-text"></div>
   </header>
 
   <main>
@@ -29,8 +44,13 @@
     </section>
 
     <section class="panel">
-      <h2>知识图谱（聚合）</h2>
+      <h2>因子知识图谱（聚合）</h2>
       <div id="graphChart" class="chart"></div>
+    </section>
+
+    <section class="panel">
+      <h2>属性影响评价图</h2>
+      <div id="attributeImpactChart" class="chart chart-short"></div>
     </section>
 
     <section class="panel panel-wide">

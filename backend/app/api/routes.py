@@ -2,7 +2,7 @@ from datetime import datetime
 
 import pandas as pd
 from flask import Blueprint, current_app, jsonify, request
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from ..extensions import db
 from ..models import Review
@@ -49,6 +49,9 @@ def get_reviews():
                     "shop_id": r.shop_id,
                     "dish": r.dish,
                     "rating": r.rating,
+                    "rating_env": r.rating_env,
+                    "rating_flavor": r.rating_flavor,
+                    "rating_service": r.rating_service,
                     "review_text": r.review_text,
                     "review_time": r.review_time.isoformat(),
                     "tags": r.tags,
@@ -59,6 +62,18 @@ def get_reviews():
             "pagination": {"page": page, "size": size, "total": total},
         }
     )
+
+
+@api_bp.get("/options")
+def get_options():
+    shop_rows = db.session.execute(
+        select(Review.shop_id, func.count(Review.id).label("review_count"))
+        .group_by(Review.shop_id)
+        .order_by(func.count(Review.id).desc())
+        .limit(300)
+    ).all()
+    shops = [{"shop_id": str(r[0]), "review_count": int(r[1])} for r in shop_rows if r[0]]
+    return jsonify({"shops": shops})
 
 
 @api_bp.post("/import")
@@ -122,12 +137,27 @@ def predict():
                 "review_time": r.review_time,
                 "rating": float(r.rating),
                 "sentiment": float(r.sentiment or 0.0),
+                "rating_env": float(r.rating_env) if r.rating_env is not None else None,
+                "rating_flavor": float(r.rating_flavor) if r.rating_flavor is not None else None,
+                "rating_service": float(r.rating_service) if r.rating_service is not None else None,
                 "dish": r.dish,
                 "shop_id": r.shop_id,
                 "tags": r.tags or "",
             }
             for r in rows
-        ]
+        ],
+        columns=[
+            "id",
+            "review_time",
+            "rating",
+            "sentiment",
+            "rating_env",
+            "rating_flavor",
+            "rating_service",
+            "dish",
+            "shop_id",
+            "tags",
+        ],
     )
     svc = PredictionService(
         model_dir=current_app.config["MODEL_DIR"],
@@ -176,12 +206,27 @@ def workflow():
                 "review_time": r.review_time,
                 "rating": float(r.rating),
                 "sentiment": float(r.sentiment or 0.0),
+                "rating_env": float(r.rating_env) if r.rating_env is not None else None,
+                "rating_flavor": float(r.rating_flavor) if r.rating_flavor is not None else None,
+                "rating_service": float(r.rating_service) if r.rating_service is not None else None,
                 "dish": r.dish,
                 "shop_id": r.shop_id,
                 "tags": r.tags or "",
             }
             for r in rows
-        ]
+        ],
+        columns=[
+            "id",
+            "review_time",
+            "rating",
+            "sentiment",
+            "rating_env",
+            "rating_flavor",
+            "rating_service",
+            "dish",
+            "shop_id",
+            "tags",
+        ],
     )
     pred_service = PredictionService(
         model_dir=current_app.config["MODEL_DIR"],

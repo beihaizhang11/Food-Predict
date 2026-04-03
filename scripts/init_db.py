@@ -32,6 +32,9 @@ def main():
                 shop_id VARCHAR(32),
                 dish VARCHAR(64),
                 rating FLOAT,
+                rating_env FLOAT NULL,
+                rating_flavor FLOAT NULL,
+                rating_service FLOAT NULL,
                 review_text TEXT,
                 review_time DATETIME,
                 tags VARCHAR(255),
@@ -44,6 +47,12 @@ def main():
             )
             """
         )
+        # 对已存在表补列，保持向后兼容
+        for col in ("rating_env", "rating_flavor", "rating_service"):
+            try:
+                cur.execute(f"ALTER TABLE reviews ADD COLUMN {col} FLOAT NULL")
+            except Exception:
+                pass
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS analysis_cache (

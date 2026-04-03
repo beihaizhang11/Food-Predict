@@ -13,10 +13,9 @@ NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "neo4j")
 def main():
     driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
     statements = [
-        "CREATE CONSTRAINT user_id IF NOT EXISTS FOR (u:User) REQUIRE u.id IS UNIQUE",
         "CREATE CONSTRAINT shop_id IF NOT EXISTS FOR (s:Shop) REQUIRE s.id IS UNIQUE",
-        "CREATE CONSTRAINT dish_name IF NOT EXISTS FOR (d:Dish) REQUIRE d.name IS UNIQUE",
-        "CREATE CONSTRAINT attr_name IF NOT EXISTS FOR (a:Attribute) REQUIRE a.name IS UNIQUE",
+        "CREATE CONSTRAINT review_id IF NOT EXISTS FOR (r:Review) REQUIRE r.id IS UNIQUE",
+        "CREATE CONSTRAINT factor_name IF NOT EXISTS FOR (f:Factor) REQUIRE f.name IS UNIQUE",
     ]
     with driver.session() as session:
         for stmt in statements:
