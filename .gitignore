@@ -1,2 +1,88 @@
+# -----------------------------
+# Python bytecode / caches
+# -----------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Test / type / lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.nox/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# -----------------------------
+# Environment / secrets
+# -----------------------------
+.env
+.env.*
+!.env.example
+
+# -----------------------------
+# Logs / temp
+# -----------------------------
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+
+# -----------------------------
+# OS / editor files
+# -----------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# -----------------------------
+# Frontend / JS tooling (if used)
+# -----------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# -----------------------------
+# Local data and large artifacts
+# -----------------------------
 ratings.zip
 ratings/
+
+# Model artifacts (generated)
+models/*.pt
+models/*.pth
+models/*.ckpt
+models/*.bin
+models/*.safetensors
+backend/models/*.pt
+backend/models/*.pth
+backend/models/*.ckpt
+backend/models/*.bin
+backend/models/*.safetensors
+
+# Optional local databases
+*.sqlite
+*.sqlite3
+*.db

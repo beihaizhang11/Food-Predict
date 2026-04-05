@@ -11,6 +11,8 @@ import torch.nn as nn
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.preprocessing import MinMaxScaler
 
+from .factor_service import FACTOR_MAP
+
 
 class TrendLSTM(nn.Module):
     def __init__(self, input_dim: int, hidden_dim: int = 48):
@@ -70,6 +72,11 @@ class PredictionService:
 
         work = df.copy()
         work["review_time"] = pd.to_datetime(work["review_time"])
+        if "tags" in work.columns:
+            work["factor_score"] = work.apply(
+                lambda row: self._factor_score(row.get("tags", ""), row.get("sentiment", 0.0)),
+                axis=1,
+            )
         freq = "W" if granularity == "week" else "MS"
 
         agg_spec = {
@@ -80,6 +87,8 @@ class PredictionService:
         for col in ("rating_env", "rating_flavor", "rating_service"):
             if col in work.columns:
                 agg_spec[col] = "mean"
+        if "factor_score" in work.columns:
+            agg_spec["factor_score"] = "mean"
 
         grouped = (
             work.set_index("review_time")
@@ -107,6 +116,8 @@ class PredictionService:
             if col in grouped.columns:
                 median = grouped[col].median()
                 grouped[col] = grouped[col].fillna(0.0 if pd.isna(median) else median)
+        if "factor_score" in grouped.columns:
+            grouped["factor_score"] = grouped["factor_score"].fillna(0.0)
 
         # 连续化 + 平滑，避免稀疏月份导致断崖
         for col in grouped.columns:
@@ -116,12 +127,16 @@ class PredictionService:
         grouped = grouped.reset_index().rename(columns={"index": "review_time"})
         grouped["time"] = grouped["review_time"].dt.strftime("%Y-%m-%d")
         base_cols = ["time", "rating", "sentiment", "review_count"]
-        extra = [c for c in ("rating_env", "rating_flavor", "rating_service") if c in grouped.columns]
+        extra = [
+            c
+            for c in ("rating_env", "rating_flavor", "rating_service", "factor_score")
+            if c in grouped.columns
+        ]
         return grouped[base_cols + extra]
 
     def _feature_cols(self, series_df: pd.DataFrame) -> list[str]:
         cols = ["rating", "sentiment", "review_count"]
-        for c in ("rating_env", "rating_flavor", "rating_service"):
+        for c in ("rating_env", "rating_flavor", "rating_service", "factor_score"):
             if c in series_df.columns:
                 cols.append(c)
         return cols
@@ -203,6 +218,8 @@ class PredictionService:
             raw = scaler.inverse_transform(next_row.reshape(1, -1))[0]
 
             pred_rating = float(raw[idx_map["rating"]])
+            if "factor_score" in idx_map:
+                pred_rating += 0.15 * float(raw[idx_map["factor_score"]])
             # 连续性约束，避免突跳
             max_step = 0.35
             pred_rating = max(last_rating - max_step, min(last_rating + max_step, pred_rating))
@@ -223,6 +240,8 @@ class PredictionService:
             for c in ("rating_env", "rating_flavor", "rating_service"):
                 if c in idx_map:
                     item[c] = float(raw[idx_map[c]])
+            if "factor_score" in idx_map:
+                item["factor_score"] = float(raw[idx_map["factor_score"]])
             forecast.append(item)
         return forecast
 
@@ -255,5 +274,14 @@ class PredictionService:
             for c in ("rating_env", "rating_flavor", "rating_service"):
                 if c in last:
                     item[c] = float(last[c])
+            if "factor_score" in last:
+                item["factor_score"] = float(last["factor_score"])
             forecast.append(item)
         return PredictResult(history=history, forecast=forecast, metrics={"mae": 0.0, "rmse": 0.0})
+
+    @staticmethod
+    def _factor_score(tags_text: str, sentiment: float) -> float:
+        tags = [x.strip() for x in str(tags_text or "").split(",") if x.strip()]
+        polarities = [FACTOR_MAP[t].polarity for t in tags if t in FACTOR_MAP]
+        base = float(np.mean(polarities)) if polarities else 0.0
+        return 0.7 * base + 0.3 * float(sentiment or 0.0)

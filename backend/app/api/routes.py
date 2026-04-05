@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime
 
 import pandas as pd
@@ -7,8 +9,13 @@ from sqlalchemy import func, select
 from ..extensions import db
 from ..models import Review
 from ..services.graph_service import GraphService
-from ..services.insight_service import build_prediction_explanation, build_workflow_metrics
 from ..services.import_service import ImportService
+from ..services.insight_service import (
+    build_prediction_explanation,
+    build_workflow_metrics,
+    compute_factor_evidence,
+    compute_factor_insights,
+)
 from ..services.nlp_service import NlpService
 from ..services.prediction_service import PredictionService
 from ..services.workflow_service import get_workflow
@@ -26,6 +33,56 @@ def _parse_date(name: str) -> datetime | None:
     if not value:
         return None
     return parse_datetime(value)
+
+
+def _build_review_stmt(
+    start: datetime | None,
+    end: datetime | None,
+    shop_id: str | None,
+    dish: str | None,
+):
+    stmt = select(Review)
+    if shop_id:
+        stmt = stmt.where(Review.shop_id == shop_id)
+    if dish:
+        stmt = stmt.where(Review.dish == dish)
+    if start:
+        stmt = stmt.where(Review.review_time >= start)
+    if end:
+        stmt = stmt.where(Review.review_time <= end)
+    return stmt
+
+
+def _rows_to_frame(rows: list[Review]) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "id": r.id,
+                "review_time": r.review_time,
+                "rating": float(r.rating),
+                "sentiment": float(r.sentiment or 0.0),
+                "rating_env": float(r.rating_env) if r.rating_env is not None else None,
+                "rating_flavor": float(r.rating_flavor) if r.rating_flavor is not None else None,
+                "rating_service": float(r.rating_service) if r.rating_service is not None else None,
+                "dish": r.dish,
+                "shop_id": r.shop_id,
+                "tags": r.tags or "",
+            }
+            for r in rows
+        ],
+        columns=[
+            "id",
+            "review_time",
+            "rating",
+            "sentiment",
+            "rating_env",
+            "rating_flavor",
+            "rating_service",
+            "dish",
+            "shop_id",
+            "tags",
+        ],
+    )
 
 
 @api_bp.get("/reviews")
@@ -70,9 +127,17 @@ def get_options():
         select(Review.shop_id, func.count(Review.id).label("review_count"))
         .group_by(Review.shop_id)
         .order_by(func.count(Review.id).desc())
-        .limit(300)
+        .limit(500)
     ).all()
-    shops = [{"shop_id": str(r[0]), "review_count": int(r[1])} for r in shop_rows if r[0]]
+    shops = [
+        {
+            "shop_id": str(row[0]),
+            "display_name": str(row[0]),
+            "review_count": int(row[1]),
+        }
+        for row in shop_rows
+        if row[0]
+    ]
     return jsonify({"shops": shops})
 
 
@@ -103,10 +168,63 @@ def get_graph():
         return jsonify({"error": str(exc)}), 400
     shop_id = request.args.get("shop_id")
     dish = request.args.get("dish")
-    limit = int(request.args.get("limit", 20))
+    limit = int(request.args.get("limit", 40))
     view = request.args.get("view", "summary")
     graph = graph_service.query_graph(start, end, shop_id, dish, limit=limit, view=view)
     return jsonify(graph)
+
+
+@api_bp.get("/insights/factors")
+def get_factor_insights():
+    try:
+        start = _parse_date("start")
+        end = _parse_date("end")
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    shop_id = request.args.get("shop_id")
+    dish = request.args.get("dish")
+    top_k = max(1, min(100, int(request.args.get("top_k", 18))))
+    min_abs_impact = float(request.args.get("min_abs_impact", 0.0))
+
+    stmt = _build_review_stmt(start, end, shop_id, dish).order_by(Review.review_time.asc())
+    rows = db.session.execute(stmt).scalars().all()
+    payload = compute_factor_insights(rows, top_k=top_k, min_abs_impact=min_abs_impact)
+    payload["filters"] = {
+        "shop_id": shop_id,
+        "start": start.isoformat() if start else None,
+        "end": end.isoformat() if end else None,
+        "top_k": top_k,
+        "min_abs_impact": min_abs_impact,
+        "review_count": len(rows),
+    }
+    return jsonify(payload)
+
+
+@api_bp.get("/insights/evidence")
+def get_factor_evidence():
+    try:
+        start = _parse_date("start")
+        end = _parse_date("end")
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    shop_id = request.args.get("shop_id")
+    dish = request.args.get("dish")
+    factor = request.args.get("factor")
+    page = max(1, int(request.args.get("page", 1)))
+    size = max(1, min(100, int(request.args.get("size", 20))))
+
+    stmt = _build_review_stmt(start, end, shop_id, dish).order_by(Review.review_time.desc())
+    rows = db.session.execute(stmt).scalars().all()
+    payload = compute_factor_evidence(rows, factor=factor, page=page, size=size)
+    payload["filters"] = {
+        "shop_id": shop_id,
+        "start": start.isoformat() if start else None,
+        "end": end.isoformat() if end else None,
+        "factor": factor,
+    }
+    return jsonify(payload)
 
 
 @api_bp.post("/predict")
@@ -130,35 +248,8 @@ def predict():
         return jsonify({"error": str(exc)}), 400
 
     rows = db.session.execute(stmt.order_by(Review.review_time.asc())).scalars().all()
-    df = pd.DataFrame(
-        [
-            {
-                "id": r.id,
-                "review_time": r.review_time,
-                "rating": float(r.rating),
-                "sentiment": float(r.sentiment or 0.0),
-                "rating_env": float(r.rating_env) if r.rating_env is not None else None,
-                "rating_flavor": float(r.rating_flavor) if r.rating_flavor is not None else None,
-                "rating_service": float(r.rating_service) if r.rating_service is not None else None,
-                "dish": r.dish,
-                "shop_id": r.shop_id,
-                "tags": r.tags or "",
-            }
-            for r in rows
-        ],
-        columns=[
-            "id",
-            "review_time",
-            "rating",
-            "sentiment",
-            "rating_env",
-            "rating_flavor",
-            "rating_service",
-            "dish",
-            "shop_id",
-            "tags",
-        ],
-    )
+    df = _rows_to_frame(rows)
+
     svc = PredictionService(
         model_dir=current_app.config["MODEL_DIR"],
         lookback=current_app.config["LSTM_LOOKBACK"],
@@ -188,46 +279,10 @@ def workflow():
     shop_id = request.args.get("shop_id")
     dish = request.args.get("dish")
 
-    stmt = select(Review)
-    if shop_id:
-        stmt = stmt.where(Review.shop_id == shop_id)
-    if dish:
-        stmt = stmt.where(Review.dish == dish)
-    if start:
-        stmt = stmt.where(Review.review_time >= start)
-    if end:
-        stmt = stmt.where(Review.review_time <= end)
+    stmt = _build_review_stmt(start, end, shop_id, dish).order_by(Review.review_time.asc())
+    rows = db.session.execute(stmt).scalars().all()
+    df = _rows_to_frame(rows)
 
-    rows = db.session.execute(stmt.order_by(Review.review_time.asc())).scalars().all()
-    df = pd.DataFrame(
-        [
-            {
-                "id": r.id,
-                "review_time": r.review_time,
-                "rating": float(r.rating),
-                "sentiment": float(r.sentiment or 0.0),
-                "rating_env": float(r.rating_env) if r.rating_env is not None else None,
-                "rating_flavor": float(r.rating_flavor) if r.rating_flavor is not None else None,
-                "rating_service": float(r.rating_service) if r.rating_service is not None else None,
-                "dish": r.dish,
-                "shop_id": r.shop_id,
-                "tags": r.tags or "",
-            }
-            for r in rows
-        ],
-        columns=[
-            "id",
-            "review_time",
-            "rating",
-            "sentiment",
-            "rating_env",
-            "rating_flavor",
-            "rating_service",
-            "dish",
-            "shop_id",
-            "tags",
-        ],
-    )
     pred_service = PredictionService(
         model_dir=current_app.config["MODEL_DIR"],
         lookback=current_app.config["LSTM_LOOKBACK"],

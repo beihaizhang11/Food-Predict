@@ -6,27 +6,36 @@ from typing import Any
 
 import pandas as pd
 
-from .factor_service import FACTOR_MAP
+from .factor_service import FACTOR_MAP, parse_tag_factors
 
 
 def build_prediction_explanation(review_df: pd.DataFrame, history: list[dict], forecast: list[dict]) -> dict:
     if review_df.empty:
+        empty_bridge = {
+            "sentiment_trend": 0.0,
+            "volume_trend": 0.0,
+            "factor_score_trend": 0.0,
+            "predicted_delta": 0.0,
+            "model_side_signal": "neutral",
+            "signal_alignment": "neutral",
+            "structured_factor_trends": [],
+        }
         return {
-            "summary": "当前筛选条件下没有评论数据，无法生成趋势解释。",
+            "summary": "No reviews under current filters. Unable to explain prediction.",
             "predicted_change": 0.0,
-            "factor_label": "店铺",
+            "factor_label": "factor",
             "top_positive_factors": [],
             "top_negative_factors": [],
             "top_attributes": [],
             "top_positive_attributes": [],
             "top_negative_attributes": [],
-            "feature_bridge": {
-                "sentiment_trend": 0.0,
-                "volume_trend": 0.0,
-                "predicted_delta": 0.0,
-                "model_side_signal": "中性",
-                "structured_factor_trends": [],
-            },
+            "supporting_attributes": [],
+            "opposing_attributes": [],
+            "attribute_impacts": [],
+            "feature_bridge": empty_bridge,
+            "attribute_alignment": "neutral",
+            "top_positive_dishes": [],
+            "top_negative_dishes": [],
         }
 
     work = review_df.copy()
@@ -34,40 +43,52 @@ def build_prediction_explanation(review_df: pd.DataFrame, history: list[dict], f
     work = work.sort_values("review_time")
 
     recent, previous = _split_recent_previous(work)
-    use_dish = _has_effective_dish_dimension(recent)
-    group_col = "dish" if use_dish else "shop_id"
-    factor_label = "菜品" if use_dish else "店铺"
-
-    factor_drivers = _group_drivers(recent, previous, group_col, output_key="factor")
-    attr_freq = _attribute_frequency(recent)
-    attr_drivers = _attribute_sentiment_drivers(recent, previous)
-
-    bridge = _feature_bridge(history, forecast)
     predicted_change = _predicted_delta(history, forecast)
-    direction = "上升" if predicted_change >= 0 else "下降"
+    direction = "up" if predicted_change >= 0 else "down"
+
+    attr_freq = _attribute_frequency(recent)
+    attr_rows = _attribute_contribution_rows(recent, previous)
+    positive = [x for x in attr_rows if x["impact"] > 0][:8]
+    negative = [x for x in sorted(attr_rows, key=lambda v: v["impact"]) if x["impact"] < 0][:8]
+
+    if predicted_change >= 0:
+        supporting = positive
+        opposing = negative
+    else:
+        supporting = negative
+        opposing = positive
+
+    net_attr_impact = float(sum(x["impact"] for x in attr_rows))
+    attr_alignment = _direction_alignment(predicted_change, net_attr_impact)
+    bridge = _feature_bridge(history, forecast)
 
     summary = (
-        f"模型预测下一阶段评分{direction}{abs(predicted_change):.2f}。"
-        f"主要正向驱动{factor_label}：{_join_names(factor_drivers['positive'], 'factor')}；"
-        f"主要负向驱动{factor_label}：{_join_names(factor_drivers['negative'], 'factor')}；"
-        f"高频属性关注点：{_join_names(attr_freq, 'attribute')}。"
-        f"模型输入侧信号：情感{bridge['sentiment_trend']:+.3f}，评论量{bridge['volume_trend']:+.3f}，"
-        f"综合判断{bridge['model_side_signal']}。"
+        f"Forecast indicates rating may go {direction} by {abs(predicted_change):.2f}. "
+        f"Main supporting factors: {_join_names(supporting, 'attribute')}. "
+        f"Main opposing factors: {_join_names(opposing, 'attribute')}. "
+        f"High-frequency factors: {_join_names(attr_freq, 'attribute')}. "
+        f"Net factor impact {net_attr_impact:+.3f} ({attr_alignment}). "
+        f"Model-side signals: sentiment {bridge['sentiment_trend']:+.3f}, "
+        f"volume {bridge['volume_trend']:+.3f}, factor score {bridge['factor_score_trend']:+.3f}."
     )
 
     return {
         "summary": summary,
         "predicted_change": round(predicted_change, 4),
-        "factor_label": factor_label,
-        "top_positive_factors": factor_drivers["positive"],
-        "top_negative_factors": factor_drivers["negative"],
+        "factor_label": "factor",
+        "top_positive_factors": _as_factor_rows(positive),
+        "top_negative_factors": _as_factor_rows(negative),
         "top_attributes": attr_freq,
-        "top_positive_attributes": attr_drivers["positive"],
-        "top_negative_attributes": attr_drivers["negative"],
+        "top_positive_attributes": positive,
+        "top_negative_attributes": negative,
+        "supporting_attributes": supporting,
+        "opposing_attributes": opposing,
+        "attribute_impacts": attr_rows[:16],
+        "attribute_alignment": attr_alignment,
         "feature_bridge": bridge,
-        # Backward compatibility
-        "top_positive_dishes": factor_drivers["positive"],
-        "top_negative_dishes": factor_drivers["negative"],
+        # Backward compatibility fields.
+        "top_positive_dishes": _as_factor_rows(positive),
+        "top_negative_dishes": _as_factor_rows(negative),
     }
 
 
@@ -107,76 +128,174 @@ def build_workflow_metrics(
     }
 
 
+def compute_factor_insights(
+    reviews: list[Any], top_k: int = 12, min_abs_impact: float = 0.0
+) -> dict[str, Any]:
+    factor_stats: dict[str, dict[str, Any]] = {}
+    category_stats: dict[str, dict[str, float]] = defaultdict(
+        lambda: {"mention_count": 0, "sum_impact": 0.0, "sum_confidence": 0.0}
+    )
+    total_mentions = 0
+
+    for review in reviews:
+        for item in _review_factor_mentions(review):
+            total_mentions += 1
+            name = item["factor"]
+            category = item["category"]
+            bucket = item["time_bucket"]
+
+            if name not in factor_stats:
+                factor_stats[name] = {
+                    "factor": name,
+                    "category": category,
+                    "mention_count": 0,
+                    "sum_impact": 0.0,
+                    "sum_effect": 0.0,
+                    "sum_sentiment": 0.0,
+                    "sum_polarity": 0.0,
+                    "sum_confidence": 0.0,
+                    "timeline": defaultdict(lambda: {"count": 0, "impact": 0.0}),
+                }
+            row = factor_stats[name]
+            row["mention_count"] += 1
+            row["sum_impact"] += item["impact"]
+            row["sum_effect"] += item["effect"]
+            row["sum_sentiment"] += item["sentiment"]
+            row["sum_polarity"] += item["polarity"]
+            row["sum_confidence"] += item["confidence"]
+            row["timeline"][bucket]["count"] += 1
+            row["timeline"][bucket]["impact"] += item["impact"]
+
+            category_stats[category]["mention_count"] += 1
+            category_stats[category]["sum_impact"] += item["impact"]
+            category_stats[category]["sum_confidence"] += item["confidence"]
+
+    factors: list[dict[str, Any]] = []
+    for item in factor_stats.values():
+        count = max(1, int(item["mention_count"]))
+        avg_impact = item["sum_impact"] / count
+        net_impact = avg_impact * math.log2(count + 1)
+        if abs(net_impact) < min_abs_impact:
+            continue
+
+        timeline_rows = []
+        for bucket, t in sorted(item["timeline"].items(), key=lambda x: x[0]):
+            timeline_rows.append(
+                {"bucket": bucket, "impact": round(float(t["impact"]), 4), "count": int(t["count"])}
+            )
+
+        factors.append(
+            {
+                "factor": item["factor"],
+                "category": item["category"],
+                "mention_count": count,
+                "avg_impact": round(float(avg_impact), 4),
+                "net_impact": round(float(net_impact), 4),
+                "avg_effect": round(float(item["sum_effect"] / count), 4),
+                "avg_sentiment": round(float(item["sum_sentiment"] / count), 4),
+                "avg_polarity": round(float(item["sum_polarity"] / count), 4),
+                "confidence": round(float(item["sum_confidence"] / count), 4),
+                "direction": "positive" if net_impact >= 0 else "negative",
+                "timeline": timeline_rows,
+            }
+        )
+
+    factors.sort(key=lambda x: abs(float(x["net_impact"])), reverse=True)
+    if top_k > 0:
+        factors = factors[:top_k]
+
+    categories = []
+    for name, row in category_stats.items():
+        count = max(1, int(row["mention_count"]))
+        avg_impact = row["sum_impact"] / count
+        categories.append(
+            {
+                "category": name,
+                "mention_count": int(row["mention_count"]),
+                "avg_impact": round(float(avg_impact), 4),
+                "net_impact": round(float(avg_impact * math.log2(count + 1)), 4),
+                "confidence": round(float(row["sum_confidence"] / count), 4),
+            }
+        )
+    categories.sort(key=lambda x: abs(float(x["net_impact"])), reverse=True)
+
+    top_positive = [f for f in factors if float(f["net_impact"]) >= 0][:5]
+    top_negative = [f for f in factors if float(f["net_impact"]) < 0][:5]
+
+    return {
+        "factors": factors,
+        "categories": categories,
+        "top_positive": top_positive,
+        "top_negative": top_negative,
+        "total_mentions": int(total_mentions),
+        "factor_count": len(factors),
+    }
+
+
+def compute_factor_evidence(
+    reviews: list[Any], factor: str | None, page: int = 1, size: int = 20
+) -> dict[str, Any]:
+    evidence_rows: list[dict[str, Any]] = []
+    selected = (factor or "").strip()
+
+    for review in reviews:
+        for item in _review_factor_mentions(review):
+            if selected and item["factor"] != selected:
+                continue
+            text = str(getattr(review, "review_text", "") or "")
+            snippet = text[:180] + ("..." if len(text) > 180 else "")
+            evidence_rows.append(
+                {
+                    "review_id": int(getattr(review, "id", 0)),
+                    "shop_id": str(getattr(review, "shop_id", "")),
+                    "review_time": getattr(review, "review_time").isoformat(),
+                    "rating": round(float(getattr(review, "rating", 0.0) or 0.0), 4),
+                    "sentiment": round(float(getattr(review, "sentiment", 0.0) or 0.0), 4),
+                    "factor": item["factor"],
+                    "category": item["category"],
+                    "tag": item["tag"],
+                    "polarity": round(float(item["polarity"]), 4),
+                    "effect": round(float(item["effect"]), 4),
+                    "impact": round(float(item["impact"]), 4),
+                    "confidence": round(float(item["confidence"]), 4),
+                    "time_bucket": item["time_bucket"],
+                    "snippet": snippet,
+                }
+            )
+
+    evidence_rows.sort(key=lambda x: abs(float(x["impact"])), reverse=True)
+    total = len(evidence_rows)
+    page = max(1, int(page))
+    size = max(1, min(100, int(size)))
+    start = (page - 1) * size
+    end = start + size
+    paged = evidence_rows[start:end]
+
+    net_impact = float(sum(x["impact"] for x in evidence_rows))
+    avg_confidence = float(sum(x["confidence"] for x in evidence_rows) / total) if total else 0.0
+    positive = sum(1 for x in evidence_rows if float(x["impact"]) >= 0)
+    negative = total - positive
+
+    return {
+        "items": paged,
+        "pagination": {"page": page, "size": size, "total": total},
+        "summary": {
+            "factor": selected or None,
+            "net_impact": round(net_impact, 4),
+            "avg_confidence": round(avg_confidence, 4),
+            "positive_count": int(positive),
+            "negative_count": int(negative),
+        },
+    }
+
+
 def _split_recent_previous(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     if df.empty:
         return df, df
-    window = max(12, int(len(df) * 0.25))
+    window = max(20, int(len(df) * 0.3))
     recent = df.tail(window)
     previous = df.iloc[max(0, len(df) - 2 * window) : max(0, len(df) - window)]
     return recent, previous
-
-
-def _has_effective_dish_dimension(df: pd.DataFrame) -> bool:
-    if df.empty or "dish" not in df.columns or "shop_id" not in df.columns:
-        return False
-
-    dish_values = df["dish"].dropna().astype(str).str.strip()
-    if dish_values.empty:
-        return False
-
-    unique_dishes = dish_values.nunique()
-    if unique_dishes <= 1:
-        return False
-
-    # If dish is effectively 1:1 mapped to shop (common in datasets without real dish field),
-    # we should not treat dish as an explanatory dimension.
-    mapping = (
-        df[["shop_id", "dish"]]
-        .dropna()
-        .astype(str)
-        .drop_duplicates()
-    )
-    if (
-        len(mapping) > 0
-        and mapping["shop_id"].nunique() == mapping["dish"].nunique() == len(mapping)
-    ):
-        return False
-
-    top_ratio = dish_values.value_counts(normalize=True).head(1).iloc[0]
-    return top_ratio < 0.9
-
-
-def _group_drivers(recent: pd.DataFrame, previous: pd.DataFrame, group_col: str, output_key: str) -> dict:
-    if recent.empty:
-        return {"positive": [], "negative": []}
-
-    r = recent.groupby(group_col).agg(avg_rating=("rating", "mean"), cnt=("rating", "count"))
-    if previous.empty:
-        p = pd.DataFrame(columns=["avg_rating_prev", "cnt_prev"])
-    else:
-        p = previous.groupby(group_col).agg(avg_rating_prev=("rating", "mean"), cnt_prev=("rating", "count"))
-
-    joined = r.join(p, how="left")
-    fallback = float(r["avg_rating"].mean()) if not r.empty else 0.0
-    joined = joined.fillna({"avg_rating_prev": fallback, "cnt_prev": 0})
-    joined["delta"] = joined["avg_rating"] - joined["avg_rating_prev"]
-    joined["weight"] = joined["cnt"].apply(lambda x: math.log2(max(2, x)))
-    joined["impact"] = joined["delta"] * joined["weight"]
-
-    rows = [
-        {
-            output_key: str(idx),
-            "delta": round(float(row["delta"]), 4),
-            "impact": round(float(row["impact"]), 4),
-            "count": int(row["cnt"]),
-        }
-        for idx, row in joined.iterrows()
-    ]
-
-    rows = sorted(rows, key=lambda x: x["impact"], reverse=True)
-    positives = [x for x in rows if x["impact"] > 0][:5]
-    negatives = [x for x in sorted(rows, key=lambda x: x["impact"]) if x["impact"] < 0][:5]
-    return {"positive": positives, "negative": negatives}
 
 
 def _attribute_frequency(recent: pd.DataFrame) -> list[dict]:
@@ -185,46 +304,78 @@ def _attribute_frequency(recent: pd.DataFrame) -> list[dict]:
     return [{"attribute": k, "count": v} for k, v in counter.most_common(8)]
 
 
-def _attribute_sentiment_drivers(recent: pd.DataFrame, previous: pd.DataFrame) -> dict:
-    def score_by_attr(df: pd.DataFrame) -> dict[str, list[float]]:
-        mapping: dict[str, list[float]] = defaultdict(list)
-        for _, row in df.iterrows():
-            sentiment = float(row.get("sentiment", 0.0))
-            for tag in _explode_tags([str(row.get("tags", ""))]):
-                base = FACTOR_MAP.get(tag).polarity if tag in FACTOR_MAP else 0.0
-                mapping[tag].append(0.6 * base + 0.4 * sentiment)
-        return mapping
+def _attribute_contribution_rows(recent: pd.DataFrame, previous: pd.DataFrame) -> list[dict]:
+    recent_tags = _explode_tags(recent["tags"].fillna("").tolist())
+    all_attrs = set(recent_tags)
+    if not all_attrs:
+        return []
 
-    recent_map = score_by_attr(recent)
-    prev_map = score_by_attr(previous)
+    total_recent_mentions = max(1, len(recent_tags))
     rows: list[dict[str, Any]] = []
+    for attr in all_attrs:
+        meta = FACTOR_MAP.get(attr)
+        polarity = float(meta.polarity if meta else 0.0)
 
-    for attr, vals in recent_map.items():
-        recent_avg = sum(vals) / len(vals)
-        prev_vals = prev_map.get(attr, vals)
-        prev_avg = sum(prev_vals) / len(prev_vals)
-        delta = recent_avg - prev_avg
+        r_subset = recent[recent["tags"].fillna("").astype(str).str.contains(attr, regex=False)]
+        p_subset = previous[previous["tags"].fillna("").astype(str).str.contains(attr, regex=False)]
 
-        recent_count = len(vals)
-        prev_count = len(prev_vals)
-        count_delta_ratio = (recent_count - prev_count) / max(prev_count, 1)
-        impact = delta * math.log2(max(2, recent_count)) + 0.35 * count_delta_ratio
+        r_count = int(len(r_subset))
+        p_count = int(len(p_subset))
+        if r_count == 0:
+            continue
+
+        r_sent = float(pd.to_numeric(r_subset["sentiment"], errors="coerce").fillna(0.0).mean())
+        p_sent = (
+            float(pd.to_numeric(p_subset["sentiment"], errors="coerce").fillna(0.0).mean())
+            if p_count
+            else r_sent
+        )
+        r_rating = float(pd.to_numeric(r_subset["rating"], errors="coerce").fillna(0.0).mean())
+        p_rating = (
+            float(pd.to_numeric(p_subset["rating"], errors="coerce").fillna(0.0).mean())
+            if p_count
+            else r_rating
+        )
+
+        recent_effect = 0.7 * polarity + 0.3 * r_sent
+        prev_effect = 0.7 * polarity + 0.3 * p_sent
+        effect_delta = recent_effect - prev_effect
+        rating_delta = r_rating - p_rating
+        count_delta_ratio = (r_count - p_count) / max(p_count, 1)
+        mention_weight = math.log2(r_count + 1)
+        exposure = r_count / total_recent_mentions
+        impact = (0.75 * recent_effect + 0.25 * rating_delta) * mention_weight * (0.7 + 0.3 * exposure)
 
         rows.append(
             {
                 "attribute": attr,
-                "delta": round(float(delta), 4),
+                "category": meta.category if meta else "other",
+                "polarity": round(polarity, 4),
+                "effect": round(float(recent_effect), 4),
+                "delta": round(float(effect_delta), 4),
+                "rating_delta": round(float(rating_delta), 4),
                 "impact": round(float(impact), 4),
-                "count": recent_count,
+                "count": r_count,
                 "count_delta_ratio": round(float(count_delta_ratio), 4),
             }
         )
 
-    rows = sorted(rows, key=lambda x: x["impact"], reverse=True)
-    return {
-        "positive": [x for x in rows if x["impact"] > 0][:8],
-        "negative": [x for x in sorted(rows, key=lambda x: x["impact"]) if x["impact"] < 0][:8],
-    }
+    rows.sort(key=lambda x: abs(x["impact"]), reverse=True)
+    return rows
+
+
+def _as_factor_rows(rows: list[dict]) -> list[dict]:
+    out = []
+    for item in rows:
+        out.append(
+            {
+                "factor": item["attribute"],
+                "impact": item["impact"],
+                "delta": item["delta"],
+                "count": item["count"],
+            }
+        )
+    return out
 
 
 def _top_tags(raw_tags: list[str], topn: int = 8) -> list[dict]:
@@ -250,8 +401,10 @@ def _feature_bridge(history: list[dict], forecast: list[dict]) -> dict:
         return {
             "sentiment_trend": 0.0,
             "volume_trend": 0.0,
+            "factor_score_trend": 0.0,
             "predicted_delta": 0.0,
-            "model_side_signal": "中性",
+            "model_side_signal": "neutral",
+            "signal_alignment": "neutral",
             "structured_factor_trends": [],
         }
 
@@ -270,36 +423,90 @@ def _feature_bridge(history: list[dict], forecast: list[dict]) -> dict:
 
     sentiment_trend = window_delta("sentiment")
     volume_trend = window_delta("review_count")
+    factor_score_trend = window_delta("factor_score")
 
     structured = []
     for col, name in (
-        ("rating_env", "环境评分"),
-        ("rating_flavor", "口味评分"),
-        ("rating_service", "服务评分"),
+        ("rating_env", "env"),
+        ("rating_flavor", "flavor"),
+        ("rating_service", "service"),
     ):
         if col in h.columns:
             structured.append({"name": name, "delta": round(window_delta(col), 4)})
 
-    signal_score = 0.6 * sentiment_trend + 0.25 * volume_trend * 0.1 + 0.15 * sum(
-        x["delta"] for x in structured
+    signal_score = (
+        0.45 * sentiment_trend
+        + 0.15 * volume_trend * 0.1
+        + 0.25 * factor_score_trend
+        + 0.15 * sum(x["delta"] for x in structured)
     )
     if signal_score > 0.02:
-        signal = "偏正向"
+        signal = "positive"
     elif signal_score < -0.02:
-        signal = "偏负向"
+        signal = "negative"
     else:
-        signal = "中性"
+        signal = "neutral"
 
     return {
         "sentiment_trend": round(sentiment_trend, 4),
         "volume_trend": round(volume_trend, 4),
+        "factor_score_trend": round(factor_score_trend, 4),
         "predicted_delta": round(pred_delta, 4),
         "model_side_signal": signal,
+        "signal_alignment": _direction_alignment(pred_delta, signal_score),
         "structured_factor_trends": structured,
     }
 
 
+def _direction_alignment(predicted_delta: float, driver_score: float) -> str:
+    if abs(predicted_delta) < 0.03 and abs(driver_score) < 0.03:
+        return "neutral"
+    if predicted_delta >= 0 and driver_score >= 0:
+        return "aligned-up"
+    if predicted_delta < 0 and driver_score < 0:
+        return "aligned-down"
+    return "conflict"
+
+
 def _join_names(items: list[dict], key: str) -> str:
     if not items:
-        return "无"
-    return "、".join(str(x.get(key, "")) for x in items[:3]) or "无"
+        return "none"
+    return " / ".join(str(x.get(key, "")) for x in items[:3]) or "none"
+
+
+def _review_factor_mentions(review: Any) -> list[dict[str, Any]]:
+    tags_text = str(getattr(review, "tags", "") or "")
+    sentiment = float(getattr(review, "sentiment", 0.0) or 0.0)
+    rating = float(getattr(review, "rating", 0.0) or 0.0)
+    review_time = getattr(review, "review_time")
+    bucket = review_time.strftime("%Y-%m") if review_time else "-"
+
+    mentions: list[dict[str, Any]] = []
+    for item in parse_tag_factors(tags_text):
+        polarity = float(item.get("polarity", 0.0))
+        effect = 0.7 * polarity + 0.3 * sentiment
+        rating_signal = max(-1.0, min(1.0, (rating - 3.0) / 2.0))
+        impact = effect * (0.75 + 0.25 * rating_signal)
+        confidence = _mention_confidence(polarity, sentiment, tags_text)
+        mentions.append(
+            {
+                "factor": str(item.get("factor", "")),
+                "category": str(item.get("category", "Other")),
+                "tag": str(item.get("tag", "")),
+                "polarity": polarity,
+                "sentiment": sentiment,
+                "effect": effect,
+                "impact": impact,
+                "confidence": confidence,
+                "time_bucket": bucket,
+            }
+        )
+    return mentions
+
+
+def _mention_confidence(polarity: float, sentiment: float, tags_text: str) -> float:
+    tag_count = len([x for x in str(tags_text).split(",") if x.strip()])
+    score = 0.35 + min(0.3, abs(polarity) * 0.3) + min(0.2, abs(sentiment) * 0.2) + min(
+        0.15, tag_count * 0.03
+    )
+    return float(max(0.0, min(1.0, score)))

@@ -3,63 +3,102 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>基于点评文本的餐饮消费趋势预测系统</title>
+  <title>餐饮消费趋势预测与因子图谱研究平台</title>
   <link rel="stylesheet" href="./styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
-  <script src="https://unpkg.com/cytoscape/dist/cytoscape.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.33.1/dist/cytoscape.min.js"></script>
 </head>
 <body>
   <header class="topbar">
     <div class="title-wrap">
-      <h1>基于美团外卖点评文本的餐饮消费趋势预测系统</h1>
-      <p>趋势预测 + 因子图谱 + 影响解释的闭环分析</p>
+      <p class="eyebrow">Research Console</p>
+      <h1>基于点评文本的餐饮消费趋势解释系统</h1>
+      <p class="subtitle">主线：商家评价趋势变化 <- 因子贡献 <- 评论证据。图谱作为主视图，预测作为辅助结论。</p>
     </div>
-
     <div class="filters">
-      <label>
+      <label class="field">
         <span>开始日期</span>
-        <input id="start" type="date" />
+        <input id="startDate" type="date" />
       </label>
-      <label>
+      <label class="field">
         <span>结束日期</span>
-        <input id="end" type="date" />
+        <input id="endDate" type="date" />
       </label>
-      <label>
+      <label class="field">
         <span>商家</span>
-        <select id="shopId">
+        <select id="shopSelect">
           <option value="">全部商家</option>
         </select>
       </label>
-      <button id="refreshBtn" type="button">刷新</button>
+      <label class="field impact-threshold">
+        <span>最小影响阈值</span>
+        <input id="minImpactRange" type="range" min="0" max="1.2" step="0.05" value="0.1" />
+        <strong id="minImpactValue">0.10</strong>
+      </label>
+      <button id="refreshBtn" type="button">刷新分析</button>
+      <button id="anomalyBtn" type="button" class="ghost">异常点模式</button>
+    </div>
+    <div class="categories">
+      <span>因子分类筛选</span>
+      <div id="categoryFilter" class="category-list"></div>
     </div>
     <div id="statusText" class="status-text"></div>
   </header>
 
-  <main>
-    <section class="panel">
-      <h2>趋势预测</h2>
-      <div id="trendChart" class="chart"></div>
-      <div id="explainSummary" class="explain-summary"></div>
-      <div id="driverCards" class="driver-cards"></div>
+  <section id="snapshotBar" class="snapshot-grid"></section>
+
+  <main class="research-layout">
+    <section class="panel graph-panel">
+      <div class="panel-head">
+        <h2>知识图谱（研究主视图）</h2>
+        <div class="mode-switch">
+          <button data-mode="overview" class="mode-btn is-active" type="button">总览</button>
+          <button data-mode="evidence" class="mode-btn" type="button">因子证据子图</button>
+          <button data-mode="timeline" class="mode-btn" type="button">时间片</button>
+        </div>
+      </div>
+      <div id="graphCanvas" class="graph-canvas"></div>
+      <div class="legend">
+        <span><i class="token token-shop"></i> 商家</span>
+        <span><i class="token token-category"></i> 因子分类</span>
+        <span><i class="token token-factor"></i> 因子</span>
+        <span><i class="token token-evidence"></i> 评论证据</span>
+        <span><i class="line line-positive"></i> 正向影响</span>
+        <span><i class="line line-negative"></i> 负向影响</span>
+      </div>
+      <div id="graphHint" class="hint"></div>
     </section>
 
-    <section class="panel">
-      <h2>因子知识图谱（聚合）</h2>
-      <div id="graphChart" class="chart"></div>
-    </section>
-
-    <section class="panel">
-      <h2>属性影响评价图</h2>
-      <div id="attributeImpactChart" class="chart chart-short"></div>
-    </section>
-
-    <section class="panel panel-wide">
-      <h2>工作流与内部数据快照</h2>
-      <div id="workflowChart" class="chart chart-short"></div>
-      <div id="workflowMetrics" class="metrics-grid"></div>
-    </section>
+    <aside class="panel insight-panel">
+      <h2>因子解释与证据</h2>
+      <div id="factorHeadline" class="factor-headline"></div>
+      <div id="factorStats" class="factor-stats"></div>
+      <div id="factorTimeline" class="mini-chart"></div>
+      <h3>代表评论证据</h3>
+      <div id="evidenceList" class="evidence-list"></div>
+    </aside>
   </main>
 
-  <script src="./app.js"></script>
+  <section class="secondary-layout">
+    <section class="panel impact-panel">
+      <h2>因子影响分解（正负分离）</h2>
+      <div id="impactChart" class="chart"></div>
+    </section>
+    <section class="panel trend-panel">
+      <h2>趋势预测（辅助视图）</h2>
+      <div id="trendChart" class="chart"></div>
+      <div id="predictionNote" class="hint"></div>
+    </section>
+  </section>
+
+  <section class="panel workflow-panel">
+    <details open>
+      <summary>流程与质量指标</summary>
+      <div id="workflowChart" class="workflow"></div>
+      <div id="workflowMetrics" class="metric-grid"></div>
+    </details>
+  </section>
+
+  <script type="module" src="./app/main.js"></script>
 </body>
 </html>
